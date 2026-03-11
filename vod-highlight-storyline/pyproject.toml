@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vod-highlight-storyline"
+version = "0.1.0"
+description = "Local-first MVP for livestream highlight detection and storyline generation"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.6",
+  "pandas>=2.0",
+  "numpy>=1.26",
+  "pyyaml>=6.0",
+  "streamlit>=1.33",
+  "scenedetect>=0.6.2",
+  "librosa>=0.10",
+  "soundfile>=0.12",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+ml = [
+  "faster-whisper>=1.0.3",
+  "openai>=1.30",
+]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
