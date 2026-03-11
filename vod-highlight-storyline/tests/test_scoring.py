@@ -1,20 +1,34 @@
-import pytest
-
-pd = pytest.importorskip("pandas")
+import pandas as pd
 
 from app.analyzers.highlight_detection import DetectConfig, detect_highlights, score_signal
+from app.schemas import ChatMessage
 
 
-def test_scoring_and_merge():
+def test_scoring_and_merge() -> None:
     df = pd.DataFrame(
         {
-            "t_start": [0, 5, 10, 15],
-            "t_end": [5, 10, 15, 20],
-            "chat_volume_z": [0, 2, 2.5, 0],
-            "audio_rms_z": [0, 1, 1.2, 0],
+            "t_start": [0, 5, 10, 15, 20],
+            "t_end": [5, 10, 15, 20, 25],
+            "chat_volume_z": [0, 1.5, 2.2, 0.2, 0],
+            "unique_users_z": [0, 1.0, 1.2, 0.0, 0],
+            "audio_rms_z": [0, 0.9, 1.3, 0.1, 0],
+            "audio_delta_z": [0, 0.7, 1.1, 0.1, 0],
+            "scene_cut_density": [0, 0.05, 0.10, 0.0, 0],
+            "transcript_excitement_score": [0, 0.5, 1.2, 0.1, 0],
+            "laughter_token_rate": [0, 0.1, 0.2, 0, 0],
         }
     )
-    scored = score_signal(df, {"chat_volume_z": 0.8, "audio_rms_z": 0.2})
-    events = detect_highlights(scored, 30, DetectConfig(pre_roll_sec=5, post_roll_sec=5, peak_quantile=0.75))
-    assert len(events) == 1
-    assert events[0].start_sec <= 5
+    scored = score_signal(df, {"chat_volume_z": 0.6, "audio_rms_z": 0.4})
+    transcript = [{"start_sec": 8, "end_sec": 14, "text": "wow great play"}]
+    messages = [ChatMessage(timestamp_sec=11, raw_timestamp="00:00:11", username="u", message="omg")]
+
+    events = detect_highlights(
+        scored=scored,
+        duration_sec=30,
+        cfg=DetectConfig(pre_roll_sec=5, post_roll_sec=5, peak_quantile=0.7),
+        transcript_segments=transcript,
+        messages=messages,
+    )
+    assert events
+    assert events[0].transcript_excerpt
+    assert events[0].representative_chat

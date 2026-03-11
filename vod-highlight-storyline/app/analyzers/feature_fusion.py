@@ -6,10 +6,10 @@ import pandas as pd
 from app.analyzers.transcript import transcript_excitement
 
 
-def _z(series: pd.Series) -> pd.Series:
+def _zscore(series: pd.Series) -> pd.Series:
     std = series.std(ddof=0)
     if std == 0 or np.isnan(std):
-        return pd.Series([0.0] * len(series))
+        return pd.Series(np.zeros(len(series)))
     return (series - series.mean()) / std
 
 
@@ -21,33 +21,35 @@ def fuse_features(
     bin_size: float,
     smoothing_window: int = 3,
 ) -> pd.DataFrame:
-    df = chat_df.merge(audio_df, on=["t_start", "t_end"], how="outer").fillna(0)
-    df = df.sort_values("t_start").reset_index(drop=True)
+    merged = chat_df.merge(audio_df, on=["t_start", "t_end"], how="outer").fillna(0.0)
+    merged = merged.sort_values("t_start").reset_index(drop=True)
 
-    # scene density
-    dens = []
-    for _, row in df.iterrows():
-        cnt = sum(1 for c in scene_cuts if row.t_start <= c < row.t_end)
-        dens.append(cnt / max(bin_size, 1.0))
-    df["scene_cut_density"] = dens
+    densities: list[float] = []
+    transcript_scores: list[float] = []
+    for _, row in merged.iterrows():
+        cut_count = sum(1 for cut in scene_cuts if row.t_start <= cut < row.t_end)
+        densities.append(cut_count / max(bin_size, 1.0))
 
-    tx_scores = []
-    for _, row in df.iterrows():
-        joined = " ".join(
-            seg["text"]
+        texts = [
+            seg.get("text", "")
             for seg in transcript_segments
-            if seg["start_sec"] < row.t_end and seg["end_sec"] >= row.t_start
-        )
-        tx_scores.append(transcript_excitement(joined))
-    df["transcript_excitement_score"] = tx_scores
+            if float(seg.get("start_sec", 0.0)) < float(row.t_end)
+            and float(seg.get("end_sec", 0.0)) > float(row.t_start)
+        ]
+        transcript_scores.append(transcript_excitement(" ".join(texts)))
 
-    df["chat_volume_z"] = _z(df["message_count"])
-    df["unique_users_z"] = _z(df["unique_users"])
-    df["audio_rms_z"] = _z(df["audio_rms"])
-    df["audio_delta_z"] = _z(df["audio_delta"])
+    merged["scene_cut_density"] = densities
+    merged["transcript_excitement_score"] = transcript_scores
 
-    df["excitement_token_rate"] = df["excitement_token_count"] / (df["message_count"].replace(0, 1))
-    df["laughter_token_rate"] = df["laughter_token_count"] / (df["message_count"].replace(0, 1))
+    merged["chat_volume_z"] = _zscore(merged["message_count"])
+    merged["unique_users_z"] = _zscore(merged["unique_users"])
+    merged["audio_rms_z"] = _zscore(merged["audio_rms"])
+    merged["audio_delta_z"] = _zscore(merged["audio_delta"])
+
+    denominator = merged["message_count"].replace(0, 1)
+    merged["excitement_token_rate"] = merged["excitement_token_count"] / denominator
+    merged["laughter_token_rate"] = merged["laughter_token_count"] / denominator
+
     smooth_cols = [
         "chat_volume_z",
         "unique_users_z",
@@ -57,7 +59,10 @@ def fuse_features(
         "transcript_excitement_score",
         "excitement_token_rate",
         "laughter_token_rate",
+        "silence_break_score",
     ]
-    for c in smooth_cols:
-        df[c] = df[c].rolling(window=smoothing_window, min_periods=1, center=True).mean()
-    return df
+    for col in smooth_cols:
+        if col in merged.columns:
+            merged[col] = merged[col].rolling(window=smoothing_window, min_periods=1, center=True).mean()
+
+    return merged

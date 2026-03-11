@@ -5,6 +5,17 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+HighlightLabel = Literal[
+    "funny",
+    "hype",
+    "surprise",
+    "clutch",
+    "emotional",
+    "chat-explosion",
+    "mixed",
+]
+
+
 class ChatMessage(BaseModel):
     timestamp_sec: float
     raw_timestamp: str
@@ -32,7 +43,7 @@ class HighlightEvent(BaseModel):
     end_tc: str
     score: float
     rank: int = 0
-    label: Literal["funny", "hype", "surprise", "clutch", "emotional", "chat-explosion", "mixed"] = "mixed"
+    label: HighlightLabel = "mixed"
     reasons: list[str] = Field(default_factory=list)
     transcript_excerpt: str = ""
     representative_chat: list[str] = Field(default_factory=list)
@@ -45,8 +56,11 @@ class StorylineItem(BaseModel):
     role: Literal["setup", "buildup", "turning_point", "climax", "resolution", "chronological"]
     start_sec: float
     end_sec: float
+    start_tc: str
+    end_tc: str
     summary: str
     evidence: list[str]
+    editor_note: str
 
 
 class StorylineOutput(BaseModel):
