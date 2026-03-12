@@ -93,4 +93,6 @@ def run_prepare(
 
     offset_messages = parse_chat(chat, chat_offset_seconds=chat_offset_seconds)
     write_json(job_dir / "chat_normalized.json", [m.model_dump() for m in offset_messages])
+    write_json(job_dir / "chat_state.json", {"last_chat_offset_seconds": chat_offset_seconds})
+
     logger.info("prepare finished in %.2fs", time.time() - started)

@@ -28,6 +28,24 @@ def _resolve_bin_size(job_dir: Path, cfg: AppConfig) -> float:
     return cfg.bin_size_sec
 
 
+def _apply_offset_once(
+    cached_rows: list[dict],
+    stored_offset_seconds: float,
+    target_offset_seconds: float,
+) -> list[ChatMessage]:
+    delta = target_offset_seconds - stored_offset_seconds
+    messages = [ChatMessage(**row) for row in cached_rows]
+    return [
+        ChatMessage(
+            timestamp_sec=message.timestamp_sec + delta,
+            raw_timestamp=message.raw_timestamp,
+            username=message.username,
+            message=message.message,
+        )
+        for message in messages
+    ]
+
+
 def _load_chat_messages(job_dir: Path, cfg: AppConfig) -> list[ChatMessage]:
     job_cfg = read_json(job_dir / "job_config.json", {})
     candidates: list[Path] = []
@@ -47,27 +65,29 @@ def _load_chat_messages(job_dir: Path, cfg: AppConfig) -> list[ChatMessage]:
             logger.info("score: using chat source %s", path)
             return parse_chat(path, chat_offset_seconds=cfg.chat_offset_seconds)
 
-    logger.warning("score: raw chat unavailable, using chat_normalized_base.json fallback")
     base_rows = read_json(job_dir / "chat_normalized_base.json", None)
-    if base_rows is None:
-        logger.warning("score: chat_normalized_base.json missing, using chat_normalized.json fallback")
-        base_rows = read_json(job_dir / "chat_normalized.json", [])
+    if base_rows is not None:
+        logger.warning("score: raw chat unavailable, using chat_normalized_base.json fallback")
+        return _apply_offset_once(base_rows, stored_offset_seconds=0.0, target_offset_seconds=cfg.chat_offset_seconds)
 
-    base_messages = [ChatMessage(**row) for row in base_rows]
-    return [
-        ChatMessage(
-            timestamp_sec=msg.timestamp_sec + cfg.chat_offset_seconds,
-            raw_timestamp=msg.raw_timestamp,
-            username=msg.username,
-            message=msg.message,
-        )
-        for msg in base_messages
-    ]
+    chat_state = read_json(job_dir / "chat_state.json", {})
+    stored_offset = float(chat_state.get("last_chat_offset_seconds", 0.0))
+    normalized_rows = read_json(job_dir / "chat_normalized.json", [])
+    logger.warning(
+        "score: base chat missing, using chat_normalized.json with stored offset=%s",
+        stored_offset,
+    )
+    return _apply_offset_once(
+        normalized_rows,
+        stored_offset_seconds=stored_offset,
+        target_offset_seconds=cfg.chat_offset_seconds,
+    )
 
 
 def _validate_audio_bin_alignment(audio_df: pd.DataFrame, bin_size_sec: float) -> None:
     if audio_df.empty:
         return
+
     first = audio_df.iloc[0]
     observed = float(first["t_end"] - first["t_start"])
     if abs(observed - bin_size_sec) > 0.2:
@@ -113,6 +133,7 @@ def run_score(job_dir: Path, preset_path: Path, cfg: AppConfig) -> list[dict]:
     events = detect_highlights(scored, duration_sec, detect_cfg, transcript_segments, messages)
 
     write_json(job_dir / "chat_normalized.json", [m.model_dump() for m in messages])
+    write_json(job_dir / "chat_state.json", {"last_chat_offset_seconds": cfg.chat_offset_seconds})
     write_json(job_dir / "highlights.json", [e.model_dump() for e in events])
     logger.info("score: generated %d highlights", len(events))
     return [e.model_dump() for e in events]

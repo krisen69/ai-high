@@ -22,22 +22,58 @@ chat_path = Path(st.text_input("Chat path", ""))
 preset = st.selectbox("Preset", ["game", "talk", "variety"], index=0)
 chat_offset = st.number_input("chat_offset_seconds", value=0.0, step=0.5)
 
+
+def _validate_prepare_inputs(video: Path, chat: Path) -> bool:
+    if not str(video):
+        st.error("Please provide a video path.")
+        return False
+    if not video.exists():
+        st.error(f"Video path does not exist: {video}")
+        return False
+    if not str(chat):
+        st.error("Please provide a chat path.")
+        return False
+    if not chat.exists():
+        st.error(f"Chat path does not exist: {chat}")
+        return False
+    return True
+
+
+def _validate_job_dir(path: Path) -> bool:
+    if not path.exists():
+        st.warning(f"Job directory does not exist yet: {path}")
+        return False
+    return True
+
+
 col1, col2, col3 = st.columns(3)
 if col1.button("Run prepare"):
-    run_prepare(video_path, chat_path, job_dir, chat_offset_seconds=float(chat_offset))
-    st.success("prepare complete")
+    if _validate_prepare_inputs(video_path, chat_path):
+        try:
+            run_prepare(video_path, chat_path, job_dir, chat_offset_seconds=float(chat_offset))
+            st.success("prepare complete")
+        except Exception as exc:
+            st.error(f"prepare failed: {exc}")
 
 if col2.button("Run score"):
-    events = run_score(
-        job_dir,
-        Path(f"app/presets/{preset}.yaml"),
-        AppConfig(chat_offset_seconds=float(chat_offset)),
-    )
-    st.success(f"score complete ({len(events)} highlights)")
+    if _validate_job_dir(job_dir):
+        try:
+            events = run_score(
+                job_dir,
+                Path(f"app/presets/{preset}.yaml"),
+                AppConfig(chat_offset_seconds=float(chat_offset)),
+            )
+            st.success(f"score complete ({len(events)} highlights)")
+        except Exception as exc:
+            st.error(f"score failed: {exc}")
 
 if col3.button("Export outputs"):
-    run_export(job_dir, extract_clips=False)
-    st.success("export complete")
+    if _validate_job_dir(job_dir):
+        try:
+            run_export(job_dir, extract_clips=False)
+            st.success("export complete")
+        except Exception as exc:
+            st.error(f"export failed: {exc}")
 
 fused_path = job_dir / "fused_features.csv"
 if fused_path.exists():
@@ -46,7 +82,12 @@ if fused_path.exists():
         st.subheader("Score-over-time")
         st.line_chart(fused_df.set_index("t_start")["score_smoothed"])
 
-highlights_raw = [item.model_dump() for item in load_highlights(job_dir)]
+try:
+    highlights_raw = [item.model_dump() for item in load_highlights(job_dir)]
+except Exception as exc:
+    st.warning(f"Could not load highlights yet: {exc}")
+    highlights_raw = []
+
 if highlights_raw:
     highlights_df = pd.DataFrame(highlights_raw)
     st.subheader("Highlights")
@@ -102,27 +143,33 @@ if highlights_raw:
         )
 
     if st.button("Save feedback"):
-        write_json(job_dir / "feedback.json", feedback_rows)
-        st.success("feedback saved")
+        try:
+            write_json(job_dir / "feedback.json", feedback_rows)
+            st.success("feedback saved")
+        except Exception as exc:
+            st.error(f"failed to save feedback: {exc}")
 
     if st.button("Generate storyline"):
-        reviewed = load_reviewed_highlights(job_dir)
-        duration_sec = float(read_json(job_dir / "metadata.json", {}).get("format", {}).get("duration", 0.0))
-        storyline = generate_storyline(reviewed, duration_sec)
-        payload = storyline.model_dump()
-        write_json(job_dir / "storyline.json", payload)
+        try:
+            reviewed = load_reviewed_highlights(job_dir)
+            duration_sec = float(read_json(job_dir / "metadata.json", {}).get("format", {}).get("duration", 0.0))
+            storyline = generate_storyline(reviewed, duration_sec)
+            payload = storyline.model_dump()
+            write_json(job_dir / "storyline.json", payload)
 
-        lines = [f"# {payload['title']}", "", payload["one_line_summary"], ""]
-        for item in payload["items"]:
-            lines += [
-                f"## {item['role']}",
-                f"- time: {item['start_tc']} - {item['end_tc']}",
-                f"- summary: {item['summary']}",
-                "- evidence:",
-                *[f"  - {evidence}" for evidence in item["evidence"]],
-                f"- editor_note: {item['editor_note']}",
-                "",
-            ]
-        (job_dir / "storyline.md").write_text("\n".join(lines), encoding="utf-8")
-        st.success("storyline generated")
-        st.json(payload)
+            lines = [f"# {payload['title']}", "", payload["one_line_summary"], ""]
+            for item in payload["items"]:
+                lines += [
+                    f"## {item['role']}",
+                    f"- time: {item['start_tc']} - {item['end_tc']}",
+                    f"- summary: {item['summary']}",
+                    "- evidence:",
+                    *[f"  - {evidence}" for evidence in item["evidence"]],
+                    f"- editor_note: {item['editor_note']}",
+                    "",
+                ]
+            (job_dir / "storyline.md").write_text("\n".join(lines), encoding="utf-8")
+            st.success("storyline generated")
+            st.json(payload)
+        except Exception as exc:
+            st.error(f"storyline generation failed: {exc}")

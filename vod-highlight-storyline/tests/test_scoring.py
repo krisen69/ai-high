@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -38,9 +40,24 @@ def test_scoring_and_merge() -> None:
     assert events[0].representative_chat
 
 
-def test_bin_size_mismatch_raises(tmp_path):
+def test_bin_size_mismatch_raises(tmp_path: Path) -> None:
     job = tmp_path / "job"
     job.mkdir()
     write_json(job / "job_config.json", {"bin_size_sec": 5.0})
     with pytest.raises(ValueError):
         score_pipeline._resolve_bin_size(job, AppConfig(bin_size_sec=4.0))
+
+
+def test_chat_fallback_no_double_offset(tmp_path: Path) -> None:
+    job = tmp_path / "job"
+    job.mkdir()
+    write_json(job / "job_config.json", {"chat_path": "/missing/chat.txt", "chat_filename": "chat.txt"})
+    write_json(job / "chat_state.json", {"last_chat_offset_seconds": 10.0})
+    write_json(
+        job / "chat_normalized.json",
+        [{"timestamp_sec": 12.0, "raw_timestamp": "00:00:02", "username": "u", "message": "m"}],
+    )
+
+    messages = score_pipeline._load_chat_messages(job, AppConfig(chat_offset_seconds=4.0))
+    assert len(messages) == 1
+    assert messages[0].timestamp_sec == 6.0
