@@ -1,0 +1,8 @@
+weights:
+  chat_volume_z: 0.35
+  unique_users_z: 0.15
+  audio_rms_z: 0.15
+  audio_delta_z: 0.10
+  scene_cut_density: 0.10
+  transcript_excitement_score: 0.10
+  laughter_token_rate: 0.05
