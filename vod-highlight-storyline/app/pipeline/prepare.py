@@ -28,8 +28,8 @@ def ffprobe_metadata(video: Path) -> dict:
         "-show_streams",
         str(video),
     ]
-    out = subprocess.check_output(cmd, text=True)
-    return json.loads(out)
+    output = subprocess.check_output(cmd, text=True)
+    return json.loads(output)
 
 
 def extract_audio(video: Path, audio_path: Path) -> None:
@@ -52,6 +52,7 @@ def run_prepare(
         "chat_path": str(chat.resolve()),
         "chat_filename": chat.name,
         "bin_size_sec": bin_size_sec,
+        "prepared_chat_offset_seconds": chat_offset_seconds,
     }
     write_json(job_dir / "job_config.json", job_config)
 
@@ -87,6 +88,9 @@ def run_prepare(
         write_df(job_dir / "audio_features.csv", audio_df)
         mark_stage_done(job_dir, "audio_features")
 
-    messages = parse_chat(chat, chat_offset_seconds=chat_offset_seconds)
-    write_json(job_dir / "chat_normalized.json", [m.model_dump() for m in messages])
+    base_messages = parse_chat(chat, chat_offset_seconds=0.0)
+    write_json(job_dir / "chat_normalized_base.json", [m.model_dump() for m in base_messages])
+
+    offset_messages = parse_chat(chat, chat_offset_seconds=chat_offset_seconds)
+    write_json(job_dir / "chat_normalized.json", [m.model_dump() for m in offset_messages])
     logger.info("prepare finished in %.2fs", time.time() - started)

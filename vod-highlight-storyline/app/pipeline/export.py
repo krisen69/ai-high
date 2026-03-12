@@ -8,8 +8,9 @@ from pathlib import Path
 import pandas as pd
 
 from app.utils.io import ensure_dir, read_json, write_json
-from app.utils.timecode import sec_to_tc
 from app.utils.logging import get_logger
+from app.utils.review import load_reviewed_highlights
+from app.utils.timecode import sec_to_tc
 
 logger = get_logger(__name__)
 
@@ -44,26 +45,33 @@ def _extract_clip(video_path: Path, output_path: Path, start_sec: float, end_sec
         "aac",
         str(output_path),
     ]
-    subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    result = subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0:
+        logger.warning("clip extraction failed for %s: %s", output_path.name, result.stderr.strip()[:300])
 
 
 def run_export(job_dir: Path, extract_clips: bool = False, top_n: int = 5) -> None:
-    highlights = read_json(job_dir / "highlights.json", [])
-    pd.DataFrame(highlights).to_csv(job_dir / "highlights.csv", index=False)
+    raw_highlights = read_json(job_dir / "highlights.json", [])
+    pd.DataFrame(raw_highlights).to_csv(job_dir / "highlights.csv", index=False)
+
+    reviewed = load_reviewed_highlights(job_dir)
+    reviewed_rows = [row.model_dump() for row in reviewed]
+    write_json(job_dir / "reviewed_highlights.json", reviewed_rows)
+    pd.DataFrame(reviewed_rows).to_csv(job_dir / "reviewed_highlights.csv", index=False)
 
     markers_path = job_dir / "markers.csv"
-    with markers_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["name", "start_tc", "end_tc", "score", "label", "note"])
+    with markers_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["name", "start_tc", "end_tc", "score", "label", "note"])
         writer.writeheader()
-        for event in highlights:
+        for event in reviewed:
             writer.writerow(
                 {
-                    "name": event.get("suggested_title", event["id"]),
-                    "start_tc": event["start_tc"],
-                    "end_tc": event["end_tc"],
-                    "score": event["score"],
-                    "label": event.get("label", "mixed"),
-                    "note": " | ".join(event.get("reasons", [])),
+                    "name": event.suggested_title or event.id,
+                    "start_tc": event.start_tc,
+                    "end_tc": event.end_tc,
+                    "score": event.score,
+                    "label": event.label,
+                    "note": " | ".join(event.reasons),
                 }
             )
 
@@ -74,16 +82,15 @@ def run_export(job_dir: Path, extract_clips: bool = False, top_n: int = 5) -> No
         video_path = Path(cfg.get("video_path", ""))
         if video_path.exists():
             clips_dir = ensure_dir(job_dir / "exports" / "clips")
-            ranked = sorted(highlights, key=lambda row: row.get("score", 0.0), reverse=True)[:top_n]
-            for event in ranked:
-                out_path = clips_dir / f"{event['id']}.mp4"
-                _extract_clip(video_path, out_path, float(event["start_sec"]), float(event["end_sec"]))
+            for event in reviewed[:top_n]:
+                _extract_clip(video_path, clips_dir / f"{event.id}.mp4", event.start_sec, event.end_sec)
         else:
-            logger.warning("export clips skipped: video path missing %s", video_path)
+            logger.warning("export clips skipped: missing video path %s", video_path)
 
     metadata = {
         "job_dir": str(job_dir),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "config": read_json(job_dir / "job_config.json", {}),
+        "reviewed_highlight_count": len(reviewed_rows),
     }
     write_json(job_dir / "export_metadata.json", metadata)

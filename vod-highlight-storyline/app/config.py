@@ -9,7 +9,7 @@ import yaml
 
 @dataclass
 class AppConfig:
-    bin_size_sec: float = 5.0
+    bin_size_sec: float | None = None
     smoothing_window_bins: int = 3
     chat_offset_seconds: float = 0.0
     pre_roll_sec: float = 15.0
@@ -18,8 +18,8 @@ class AppConfig:
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+    with path.open("r", encoding="utf-8") as file:
+        return yaml.safe_load(file) or {}
 
 
 def load_preset(path: Path) -> dict[str, float]:

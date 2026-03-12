@@ -15,6 +15,19 @@ from app.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _resolve_bin_size(job_dir: Path, cfg: AppConfig) -> float:
+    job_cfg = read_json(job_dir / "job_config.json", {})
+    prepared_bin = float(job_cfg.get("bin_size_sec", 5.0))
+    if cfg.bin_size_sec is None:
+        return prepared_bin
+    if abs(cfg.bin_size_sec - prepared_bin) > 1e-6:
+        raise ValueError(
+            f"Bin size mismatch: prepare used {prepared_bin}, score requested {cfg.bin_size_sec}. "
+            "Use matching bin size or rerun prepare."
+        )
+    return cfg.bin_size_sec
+
+
 def _load_chat_messages(job_dir: Path, cfg: AppConfig) -> list[ChatMessage]:
     job_cfg = read_json(job_dir / "job_config.json", {})
     candidates: list[Path] = []
@@ -24,7 +37,9 @@ def _load_chat_messages(job_dir: Path, cfg: AppConfig) -> list[ChatMessage]:
 
     chat_filename = job_cfg.get("chat_filename")
     if chat_filename:
-        candidates.append(job_dir / f"chat_source{Path(chat_filename).suffix.lower() or '.txt'}")
+        suffix = Path(chat_filename).suffix.lower() or ".txt"
+        candidates.append(job_dir / f"chat_source{suffix}")
+
     candidates.extend([job_dir / "chat_source.txt", job_dir / "chat_source.csv"])
 
     for path in candidates:
@@ -32,17 +47,34 @@ def _load_chat_messages(job_dir: Path, cfg: AppConfig) -> list[ChatMessage]:
             logger.info("score: using chat source %s", path)
             return parse_chat(path, chat_offset_seconds=cfg.chat_offset_seconds)
 
-    logger.warning("score: no original/raw chat source found, using cached normalized chat")
-    base = [ChatMessage(**row) for row in read_json(job_dir / "chat_normalized.json", [])]
+    logger.warning("score: raw chat unavailable, using chat_normalized_base.json fallback")
+    base_rows = read_json(job_dir / "chat_normalized_base.json", None)
+    if base_rows is None:
+        logger.warning("score: chat_normalized_base.json missing, using chat_normalized.json fallback")
+        base_rows = read_json(job_dir / "chat_normalized.json", [])
+
+    base_messages = [ChatMessage(**row) for row in base_rows]
     return [
         ChatMessage(
-            timestamp_sec=float(row.timestamp_sec) + cfg.chat_offset_seconds,
-            raw_timestamp=row.raw_timestamp,
-            username=row.username,
-            message=row.message,
+            timestamp_sec=msg.timestamp_sec + cfg.chat_offset_seconds,
+            raw_timestamp=msg.raw_timestamp,
+            username=msg.username,
+            message=msg.message,
         )
-        for row in base
+        for msg in base_messages
     ]
+
+
+def _validate_audio_bin_alignment(audio_df: pd.DataFrame, bin_size_sec: float) -> None:
+    if audio_df.empty:
+        return
+    first = audio_df.iloc[0]
+    observed = float(first["t_end"] - first["t_start"])
+    if abs(observed - bin_size_sec) > 0.2:
+        raise ValueError(
+            f"Audio feature bin mismatch: expected ~{bin_size_sec}s, observed {observed:.3f}s. "
+            "Rerun prepare or use matching bin size."
+        )
 
 
 def run_score(job_dir: Path, preset_path: Path, cfg: AppConfig) -> list[dict]:
@@ -51,10 +83,13 @@ def run_score(job_dir: Path, preset_path: Path, cfg: AppConfig) -> list[dict]:
     if duration_sec <= 0:
         raise ValueError(f"Invalid or missing metadata duration in {job_dir / 'metadata.json'}")
 
+    bin_size_sec = _resolve_bin_size(job_dir, cfg)
     messages = _load_chat_messages(job_dir, cfg)
-    chat_df = compute_chat_features(messages, cfg.bin_size_sec, duration_sec)
+    chat_df = compute_chat_features(messages, bin_size_sec, duration_sec)
 
     audio_df = pd.read_csv(job_dir / "audio_features.csv")
+    _validate_audio_bin_alignment(audio_df, bin_size_sec)
+
     transcript_segments = read_json(job_dir / "transcript.json", [])
     scene_cuts = read_json(job_dir / "scene_cuts.json", [])
 
@@ -63,7 +98,7 @@ def run_score(job_dir: Path, preset_path: Path, cfg: AppConfig) -> list[dict]:
         audio_df=audio_df,
         transcript_segments=transcript_segments,
         scene_cuts=scene_cuts,
-        bin_size=cfg.bin_size_sec,
+        bin_size=bin_size_sec,
         smoothing_window=cfg.smoothing_window_bins,
     )
     weights = load_preset(preset_path)

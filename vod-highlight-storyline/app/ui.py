@@ -10,8 +10,8 @@ from app.config import AppConfig
 from app.pipeline.export import run_export
 from app.pipeline.prepare import run_prepare
 from app.pipeline.score import run_score
-from app.schemas import HighlightEvent
 from app.utils.io import read_json, write_json
+from app.utils.review import load_highlights, load_reviewed_highlights
 
 st.set_page_config(page_title="vod-highlight-storyline", layout="wide")
 st.title("vod-highlight-storyline")
@@ -28,7 +28,11 @@ if col1.button("Run prepare"):
     st.success("prepare complete")
 
 if col2.button("Run score"):
-    events = run_score(job_dir, Path(f"app/presets/{preset}.yaml"), AppConfig(chat_offset_seconds=float(chat_offset)))
+    events = run_score(
+        job_dir,
+        Path(f"app/presets/{preset}.yaml"),
+        AppConfig(chat_offset_seconds=float(chat_offset)),
+    )
     st.success(f"score complete ({len(events)} highlights)")
 
 if col3.button("Export outputs"):
@@ -42,7 +46,7 @@ if fused_path.exists():
         st.subheader("Score-over-time")
         st.line_chart(fused_df.set_index("t_start")["score_smoothed"])
 
-highlights_raw = read_json(job_dir / "highlights.json", [])
+highlights_raw = [item.model_dump() for item in load_highlights(job_dir)]
 if highlights_raw:
     highlights_df = pd.DataFrame(highlights_raw)
     st.subheader("Highlights")
@@ -65,14 +69,19 @@ if highlights_raw:
     st.subheader("Review")
     existing_feedback = {row["id"]: row for row in read_json(job_dir / "feedback.json", [])}
     feedback_rows: list[dict] = []
+
     for row in highlights_raw:
-        st.markdown(f"**{row['id']}** `{row['start_tc']} - {row['end_tc']}`  ")
+        st.markdown(f"**{row['id']}** `{row['start_tc']} - {row['end_tc']}`")
         st.caption(f"Reasons: {' | '.join(row.get('reasons', []))}")
         st.caption(f"Transcript: {row.get('transcript_excerpt', '')}")
         st.caption(f"Chat: {' / '.join(row.get('representative_chat', []))}")
 
         c1, c2, c3 = st.columns(3)
-        accepted = c1.checkbox("accept", value=existing_feedback.get(row["id"], {}).get("accepted", False), key=f"acc_{row['id']}")
+        accepted = c1.checkbox(
+            "accept",
+            value=existing_feedback.get(row["id"], {}).get("accepted", False),
+            key=f"acc_{row['id']}",
+        )
         start_sec = c2.number_input(
             "start_sec",
             value=float(existing_feedback.get(row["id"], {}).get("start_sec", row["start_sec"])),
@@ -83,40 +92,37 @@ if highlights_raw:
             value=float(existing_feedback.get(row["id"], {}).get("end_sec", row["end_sec"])),
             key=f"end_{row['id']}",
         )
-        feedback_rows.append({"id": row["id"], "accepted": accepted, "start_sec": start_sec, "end_sec": end_sec})
+        feedback_rows.append(
+            {
+                "id": row["id"],
+                "accepted": accepted,
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+            }
+        )
 
     if st.button("Save feedback"):
         write_json(job_dir / "feedback.json", feedback_rows)
         st.success("feedback saved")
 
     if st.button("Generate storyline"):
-        events = [HighlightEvent(**row) for row in highlights_raw]
-        feedback = {row["id"]: row for row in read_json(job_dir / "feedback.json", [])}
-        accepted = [event for event in events if feedback.get(event.id, {}).get("accepted")]
-        selected = accepted if accepted else events
-
-        for event in selected:
-            fb = feedback.get(event.id)
-            if not fb:
-                continue
-            event.start_sec = float(fb["start_sec"])
-            event.end_sec = float(fb["end_sec"])
-
+        reviewed = load_reviewed_highlights(job_dir)
         duration_sec = float(read_json(job_dir / "metadata.json", {}).get("format", {}).get("duration", 0.0))
-        storyline = generate_storyline(selected, duration_sec)
-        write_json(job_dir / "storyline.json", storyline.model_dump())
+        storyline = generate_storyline(reviewed, duration_sec)
+        payload = storyline.model_dump()
+        write_json(job_dir / "storyline.json", payload)
 
-        lines = [f"# {storyline.title}", "", storyline.one_line_summary, ""]
-        for item in storyline.items:
+        lines = [f"# {payload['title']}", "", payload["one_line_summary"], ""]
+        for item in payload["items"]:
             lines += [
-                f"## {item.role}",
-                f"- time: {item.start_tc} - {item.end_tc}",
-                f"- summary: {item.summary}",
+                f"## {item['role']}",
+                f"- time: {item['start_tc']} - {item['end_tc']}",
+                f"- summary: {item['summary']}",
                 "- evidence:",
-                *[f"  - {e}" for e in item.evidence],
-                f"- editor_note: {item.editor_note}",
+                *[f"  - {evidence}" for evidence in item["evidence"]],
+                f"- editor_note: {item['editor_note']}",
                 "",
             ]
         (job_dir / "storyline.md").write_text("\n".join(lines), encoding="utf-8")
         st.success("storyline generated")
-        st.json(storyline.model_dump())
+        st.json(payload)

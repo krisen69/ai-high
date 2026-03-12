@@ -1,7 +1,11 @@
 import pandas as pd
+import pytest
 
 from app.analyzers.highlight_detection import DetectConfig, detect_highlights, score_signal
+from app.config import AppConfig
+from app.pipeline import score as score_pipeline
 from app.schemas import ChatMessage
+from app.utils.io import write_json
 
 
 def test_scoring_and_merge() -> None:
@@ -32,3 +36,11 @@ def test_scoring_and_merge() -> None:
     assert events
     assert events[0].transcript_excerpt
     assert events[0].representative_chat
+
+
+def test_bin_size_mismatch_raises(tmp_path):
+    job = tmp_path / "job"
+    job.mkdir()
+    write_json(job / "job_config.json", {"bin_size_sec": 5.0})
+    with pytest.raises(ValueError):
+        score_pipeline._resolve_bin_size(job, AppConfig(bin_size_sec=4.0))
